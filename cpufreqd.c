@@ -32,6 +32,20 @@ static void print_help()
     );
 }
 
+//! A string with a length
+typedef struct string_view
+{
+    const char* str;
+    size_t size;
+} string_view;
+
+#define STRING_VIEW_INIT(str) { str, (sizeof(str) - 1u) }
+
+//! EPP value to set when the CPU is mostly idle
+static const string_view g_epp_low_load_value = STRING_VIEW_INIT("balance_power");
+//! EPP value to set when the CPU is under load
+static const string_view g_epp_high_load_value = STRING_VIEW_INIT("balance_performance");
+
 //! Pointer to libgamemode library
 static void* g_libgamemode = NULL;
 
@@ -200,20 +214,22 @@ static int update_cpu_times()
     return 0;
 }
 
-//! Sets EPP mode to the given value for all CPUs
-static int set_epp(const char* epp_value)
-{
-    const size_t epp_value_size = strlen(epp_value);
+static const string_view g_sysfs_epp_path_prefix = STRING_VIEW_INIT("/sys/devices/system/cpu/cpufreq/policy");
+static const string_view g_sysfs_epp_path_suffix = STRING_VIEW_INIT("/energy_performance_preference");
 
-    //printf("Setting EPP value %s\n", epp_value);
+//! Sets EPP mode to the given value for all CPUs
+static int set_epp(string_view epp_value)
+{
+    //printf("Setting EPP value %s\n", epp_value.str);
 
     char path[256u];
-    memcpy(path, "/sys/devices/system/cpu/cpufreq/policy", sizeof("/sys/devices/system/cpu/cpufreq/policy") - 1u);
-    char* p = path + (sizeof("/sys/devices/system/cpu/cpufreq/policy") - 1u);
+    memcpy(path, g_sysfs_epp_path_prefix.str, g_sysfs_epp_path_prefix.size);
+    char* p = path + g_sysfs_epp_path_prefix.size;
     for (uint32_t i = 0u; i < 65536u; ++i)
     {
         char* q = ui32toa_cloc(i, p);
-        memcpy(q, "/energy_performance_preference", sizeof("/energy_performance_preference"));
+        memcpy(q, g_sysfs_epp_path_suffix.str, g_sysfs_epp_path_suffix.size);
+        q[g_sysfs_epp_path_suffix.size] = '\0';
 
         int fd = open(path, O_WRONLY | O_CLOEXEC);
         if (fd < 0)
@@ -229,7 +245,7 @@ static int set_epp(const char* epp_value)
         size_t written_size = 0u;
         do
         {
-            ssize_t sz = write(fd, epp_value, epp_value_size - written_size);
+            ssize_t sz = write(fd, epp_value.str, epp_value.size - written_size);
             if (sz < 0)
             {
                 int err = errno;
@@ -243,7 +259,7 @@ static int set_epp(const char* epp_value)
 
             written_size += sz;
         }
-        while (written_size < epp_value_size);
+        while (written_size < epp_value.size);
 
         close(fd);
     }
@@ -306,7 +322,7 @@ static inline int main_loop()
 
         if (update_cpufreq && !is_gamemode_active())
         {
-            res = set_epp(g_high_cpu_load ? "balance_performance" : "balance_power");
+            res = set_epp(g_high_cpu_load ? g_epp_high_load_value : g_epp_low_load_value);
             if (res < 0)
                 return res;
 
