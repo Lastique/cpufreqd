@@ -188,7 +188,8 @@ static int set_epp(const char* epp_value)
 
     //printf("Setting EPP value %s\n", epp_value);
 
-    char path[256u] = "/sys/devices/system/cpu/cpufreq/policy";
+    char path[256u];
+    memcpy(path, "/sys/devices/system/cpu/cpufreq/policy", sizeof("/sys/devices/system/cpu/cpufreq/policy") - 1u);
     char* p = path + (sizeof("/sys/devices/system/cpu/cpufreq/policy") - 1u);
     for (uint32_t i = 0u; i < 65536u; ++i)
     {
