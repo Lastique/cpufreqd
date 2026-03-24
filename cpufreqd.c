@@ -17,6 +17,21 @@
 #include <time.h>
 #include <errno.h>
 
+//! Shows supported command line options
+static void print_help()
+{
+    puts
+    (
+        "cpufreqd [options]\n"
+        "\n"
+        "Options:\n"
+        "\n"
+        "  --help - Show this help.\n"
+        "  --enable-gamemode - Enable support for gamemode tracking. Requires libgamemode.so.0\n"
+        "                      to be installed and D-Bus to be accessible.\n"
+    );
+}
+
 //! Pointer to libgamemode library
 static void* g_libgamemode = NULL;
 
@@ -39,6 +54,10 @@ static void init_libgamemode()
             dlclose(g_libgamemode);
             g_libgamemode = NULL;
         }
+    }
+    else
+    {
+        fputs("libgamemode.so[.0] library not found, gamemode support will be disabled", stderr);
     }
 }
 
@@ -232,16 +251,13 @@ static int set_epp(const char* epp_value)
     return 0;
 }
 
-int main()
+static inline int main_loop()
 {
-    init_libgamemode();
-    if (update_cpu_times() < 0)
-        return 1;
-
     struct timespec sleep_time = {};
     sleep_time.tv_sec = 1;
     unsigned int low_cpu_load_times = 0u;
     bool update_cpufreq = true;
+    int res = 0;
 
     while (true)
     {
@@ -250,8 +266,9 @@ int main()
         const uint64_t last_idle_time = g_idle_time;
         const uint64_t last_total_time = g_total_time;
 
-        if (update_cpu_times() < 0)
-            return 1;
+        res = update_cpu_times();
+        if (res < 0)
+            return res;
 
         uint64_t idle_time_delta = g_idle_time - last_idle_time;
         uint64_t total_time_delta = g_total_time - last_total_time;
@@ -289,12 +306,46 @@ int main()
 
         if (update_cpufreq && !is_gamemode_active())
         {
-            if (set_epp(g_high_cpu_load ? "balance_performance" : "balance_power") < 0)
-                return 1;
+            res = set_epp(g_high_cpu_load ? "balance_performance" : "balance_power");
+            if (res < 0)
+                return res;
 
             update_cpufreq = false;
         }
     }
+}
+
+int main(int argc, char* argv[])
+{
+    {
+        bool enable_gamemode = false;
+        for (int i = 1; i < argc; ++i)
+        {
+            if (strcmp(argv[i], "--enable-gamemode") == 0)
+            {
+                enable_gamemode = true;
+            }
+            else if (strcmp(argv[i], "--help") == 0)
+            {
+                print_help();
+                return 0;
+            }
+            else
+            {
+                fprintf(stderr, "Unsupported option: %s\nUse --help to display supported options.\n", argv[i]);
+                return 1;
+            }
+        }
+
+        if (enable_gamemode)
+            init_libgamemode();
+    }
+
+    if (update_cpu_times() < 0)
+        return 1;
+
+    if (main_loop() < 0)
+        return 1;
 
     return 0;
 }
