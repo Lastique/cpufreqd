@@ -3,8 +3,4 @@ project(cpufreqd)
 
 set(CMAKE_C_STANDARD 99)
 
-add_executable(cpufreqd
-    cpufreqd.c
-)
-
-install(TARGETS cpufreqd)
+add_subdirectory(src)
