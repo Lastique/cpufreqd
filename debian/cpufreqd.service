@@ -4,8 +4,9 @@ Conflicts=power-profiles-daemon.service tuned.service tlp.service auto-cpufreq.s
 After=local-fs.target
 
 [Service]
-Type=exec
-ExecStart=/usr/bin/cpufreqd
+Type=dbus
+BusName=org.cpufreqd
+ExecStart=/usr/bin/cpufreqd --enable-dbus
 KillMode=mixed
 Restart=on-failure
 OOMScoreAdjust=-100

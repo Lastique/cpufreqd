@@ -6,4 +6,21 @@ Currently, the daemon only supports Intel CPUs with EPP and switches `energy_per
 
 The daemon is incompatible with other daemons that modify cpufreq settings, such as [TLP](https://github.com/linrunner/TLP) or [power-profiles-daemon](https://github.com/Rongronggg9/power-profiles-daemon). The other daemons need to be disabled to avoid conflicts.
 
-The daemon has optional support for [gamemode](https://github.com/feralinteractive/gamemode) and, if enabled, will suspend its operation while gamemode is active. This way, gamemode can temporarily set cpufreq parameters for increased performance (e.g. during a gaming session) and cpufreqd won't interfere. Once gamemode deactivates, cpufreqd takes over the control again. In order for this integration to work, `libgamemode.so.0` must be installed on the system, which is typically installed along with gamemode itself, and D-Bus must be accessible for the user running cpufreqd. The support can be enabled by passing `--enable-gamemode` in cpufreqd command line.
+# Command Line Interface
+
+The daemon can be controlled from the command line using the `cpufreqd-ctl` utility. Run `cpufreqd-ctl help` for the list of supported commands.
+
+In particular, `cpufreqd-ctl suspend` adds a suspend request to the running cpufreqd daemon. While there is at least one suspend request active, the daemon will not adjust cpufreq parameters. The command returns a cookie that can be used in the subsequent `cpufreqd-ctl resume <cookie>` command to remove the added suspend request.
+
+In order for the `cpufreqd-ctl` utility to function, the daemon must be run with `--enable-dbus` parameter and with system D-Bus available.
+
+# Gamemode Integration
+
+The daemon can be used together with [gamemode](https://github.com/feralinteractive/gamemode). For this, gamemode should be configured to either not touch cpufreq parameters such as CPU governor and EPP, or to suspend and resume cpufreqd when a game is started and finished. For example, the following lines can be added in `/etc/gamemode.ini`:
+
+```
+[custom]
+; Custom scripts (executed using the shell) when gamemode starts and ends
+start=file="/tmp/gamemode_$PPID.cpufreqd_cookie"; [ -f "$file" ] || /usr/bin/cpufreqd-ctl suspend > "$file"
+end=file="/tmp/gamemode_$PPID.cpufreqd_cookie"; if [ -f "$file" ]; then read -r cookie < "$file" && rm -f "$file" && /usr/bin/cpufreqd-ctl resume "$cookie"; fi
+```

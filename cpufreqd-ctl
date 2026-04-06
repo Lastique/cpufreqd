@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+
+set -e
+set -o pipefail
+
+help()
+{
+    echo "\
+cpufreqd-ctl <command> [options]
+
+Supported commands:
+    -h
+    help
+        Prints this help.
+
+    get-suspend-request-count
+        Prints the number of active suspend request.
+
+    suspend
+        Adds a new suspend request and prints a cookie of the request.
+        The daemon will not perform cpufreq control while there is at
+        least one active suspend request.
+
+    resume <cookie>
+        Removes the previously added suspend request. <cookie> is the
+        cookie that was returned by the suspend command.
+"
+}
+
+COMMAND="$1"
+
+if [ -z "$COMMAND" ]
+then
+    help
+    exit 0
+fi
+
+shift
+
+case $COMMAND in
+    -h|help)
+        help
+        ;;
+
+    get-suspend-request-count)
+        read -r TYPE VALUE <<< "$(dbus-send --system --print-reply=literal --type=method_call --dest=org.cpufreqd /org/cpufreqd/Control org.cpufreqd.Control.GetSuspendRequestCount)"
+        if [[ "$TYPE" == "uint32" ]]
+        then
+            echo "$VALUE"
+        else
+            echo "Failed to parse result of the GetSuspendRequestCount method call, unexpected count type: $TYPE" >&2
+            exit 1
+        fi
+        ;;
+
+    suspend)
+        read -r TYPE VALUE <<< "$(dbus-send --system --print-reply=literal --type=method_call --dest=org.cpufreqd /org/cpufreqd/Control org.cpufreqd.Control.Suspend)"
+        if [[ "$TYPE" == "uint32" ]]
+        then
+            echo "$VALUE"
+        else
+            echo "Failed to parse result of the Suspend method call, unexpected cookie type: $TYPE" >&2
+            exit 1
+        fi
+        ;;
+
+    resume)
+        COOKIE="$1"
+        if [ -z "$COOKIE" ]
+        then
+            echo "Suspend cookie not specified" >&2
+            exit 1
+        fi
+        shift
+        if [[ $COOKIE =~ ^[0-9]+$ ]]
+        then
+            dbus-send --system --print-reply=literal --type=method_call --dest=org.cpufreqd /org/cpufreqd/Control org.cpufreqd.Control.Resume "uint32:$COOKIE"
+        else
+            echo "Invalid suspend cookie specified: $COOKIE" >&2
+            exit 1
+        fi
+        ;;
+
+    *)
+        echo "Unsupported command: $COMMAND" >&2
+        echo "" >&2
+        help >&2
+        exit 1
+        ;;
+esac

@@ -13,9 +13,12 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <dlfcn.h>
 #include <time.h>
 #include <errno.h>
+
+#include "dbus.h"
+#include "time_utils.h"
+#include "string_view.h"
 
 //! Shows supported command line options
 static void print_help()
@@ -27,59 +30,14 @@ static void print_help()
         "Options:\n"
         "\n"
         "  --help - Show this help.\n"
-        "  --enable-gamemode - Enable support for gamemode tracking. Requires libgamemode.so.0\n"
-        "                      to be installed and D-Bus to be accessible.\n"
+        "  --enable-dbus - Register control object in D-Bus.\n"
     );
 }
-
-//! A string with a length
-typedef struct string_view
-{
-    const char* str;
-    size_t size;
-} string_view;
-
-#define STRING_VIEW_INIT(str) { str, (sizeof(str) - 1u) }
 
 //! EPP value to set when the CPU is mostly idle
 static const string_view g_epp_low_load_value = STRING_VIEW_INIT("balance_power");
 //! EPP value to set when the CPU is under load
 static const string_view g_epp_high_load_value = STRING_VIEW_INIT("balance_performance");
-
-//! Pointer to libgamemode library
-static void* g_libgamemode = NULL;
-
-//! Type of the gamemode_query_status function from libgamemode.so
-typedef int (gamemode_query_status_t)(void);
-static gamemode_query_status_t* g_gamemode_query_status = NULL;
-
-//! Initializes function pointers for interacting with libgamemode
-static void init_libgamemode()
-{
-    g_libgamemode = dlopen("libgamemode.so.0", RTLD_NOW | RTLD_LOCAL);
-    if (!g_libgamemode)
-        g_libgamemode = dlopen("libgamemode.so", RTLD_NOW | RTLD_LOCAL);
-
-    if (g_libgamemode)
-    {
-        g_gamemode_query_status = (gamemode_query_status_t*)dlsym(g_libgamemode, "real_gamemode_query_status");
-        if (!g_gamemode_query_status)
-        {
-            dlclose(g_libgamemode);
-            g_libgamemode = NULL;
-        }
-    }
-    else
-    {
-        fputs("libgamemode.so[.0] library not found, gamemode support will be disabled", stderr);
-    }
-}
-
-//! Checks id gamemode is active
-static inline bool is_gamemode_active()
-{
-    return (g_gamemode_query_status != NULL) && g_gamemode_query_status() > 0;
-}
 
 //! Skips space characters
 static inline const char* skip_spaces(const char* p)
@@ -267,17 +225,41 @@ static int set_epp(string_view epp_value)
     return 0;
 }
 
-static inline int main_loop()
+//! Type of the function for waiting until timeout
+typedef int wait_func_t(int64_t timeout);
+
+//! Waiting function that sleeps until timeout
+static int sleep_wait_func(int64_t timeout)
 {
-    struct timespec sleep_time = {};
-    sleep_time.tv_sec = 1;
+    while (true)
+    {
+        int64_t wait_time = timeout - clock_monotonic_now_us();
+        if (wait_time <= 0)
+            break;
+
+        struct timespec sleep_time = {};
+        sleep_time.tv_sec = (time_t)(wait_time / 1000000);
+        sleep_time.tv_nsec = (wait_time % 1000000) * 1000;
+        nanosleep(&sleep_time, NULL);
+    }
+
+    return 0;
+}
+
+static inline int main_loop(wait_func_t* wait_func)
+{
+    int64_t wakeup_time = clock_monotonic_now_us() + 1000000;
     unsigned int low_cpu_load_times = 0u;
     bool update_cpufreq = true;
     int res = 0;
 
     while (true)
     {
-        nanosleep(&sleep_time, NULL);
+        res = wait_func(wakeup_time);
+        if (res < 0)
+            return res;
+
+        wakeup_time += 1000000;
 
         const uint64_t last_idle_time = g_idle_time;
         const uint64_t last_total_time = g_total_time;
@@ -320,7 +302,7 @@ static inline int main_loop()
             }
         }
 
-        if (update_cpufreq && !is_gamemode_active())
+        if (update_cpufreq && !is_suspended())
         {
             res = set_epp(g_high_cpu_load ? g_epp_high_load_value : g_epp_low_load_value);
             if (res < 0)
@@ -333,34 +315,35 @@ static inline int main_loop()
 
 int main(int argc, char* argv[])
 {
+    bool enable_dbus = false;
+    for (int i = 1; i < argc; ++i)
     {
-        bool enable_gamemode = false;
-        for (int i = 1; i < argc; ++i)
+        if (strcmp(argv[i], "--enable-dbus") == 0)
         {
-            if (strcmp(argv[i], "--enable-gamemode") == 0)
-            {
-                enable_gamemode = true;
-            }
-            else if (strcmp(argv[i], "--help") == 0)
-            {
-                print_help();
-                return 0;
-            }
-            else
-            {
-                fprintf(stderr, "Unsupported option: %s\nUse --help to display supported options.\n", argv[i]);
-                return 1;
-            }
+            enable_dbus = true;
         }
+        else if (strcmp(argv[i], "--help") == 0)
+        {
+            print_help();
+            return 0;
+        }
+        else
+        {
+            fprintf(stderr, "Unsupported option: %s\nUse --help to display supported options.\n", argv[i]);
+            return 1;
+        }
+    }
 
-        if (enable_gamemode)
-            init_libgamemode();
+    if (enable_dbus)
+    {
+        if (init_dbus() < 0)
+            return 1;
     }
 
     if (update_cpu_times() < 0)
         return 1;
 
-    if (main_loop() < 0)
+    if (main_loop(enable_dbus ? &process_dbus_until : &sleep_wait_func) < 0)
         return 1;
 
     return 0;
