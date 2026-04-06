@@ -246,9 +246,26 @@ static int sleep_wait_func(int64_t timeout)
     return 0;
 }
 
+enum
+{
+    //! Interval of updating CPU load times in low CPU load mode, in microseconds
+    low_cpu_load_wait_us = 1000000,
+    //! Interval of updating CPU load times in high CPU load mode, in microseconds
+    high_cpu_load_wait_us = 2000000,
+    //! Number of CPU load time updates to wait for before switching to low CPU load mode
+    low_cpu_load_times_to_demote = 2,
+    //! Divisor for calculating the threshold for switching from low to high CPU load mode
+    low_to_high_load_switch_threshold_div = 10, // = total_time / 10 = 10% load
+    //! Divisor for calculating the threshold for switching from high to low CPU load mode
+    high_to_low_load_switch_threshold_div = 16 // = total_time / 16 = 6.25% load
+};
+
+_Static_assert(low_to_high_load_switch_threshold_div <= high_to_low_load_switch_threshold_div,
+    "The CPU load threshold for switching from low to high load should not be below the threshold for switching from high to low load");
+
 static inline int main_loop(wait_func_t* wait_func)
 {
-    int64_t wakeup_time = clock_monotonic_now_us() + 1000000;
+    int64_t wakeup_time = clock_monotonic_now_us() + low_cpu_load_wait_us;
     unsigned int low_cpu_load_times = 0u;
     bool update_cpufreq = true;
     int res = 0;
@@ -258,8 +275,6 @@ static inline int main_loop(wait_func_t* wait_func)
         res = wait_func(wakeup_time);
         if (res < 0)
             return res;
-
-        wakeup_time += 1000000;
 
         const uint64_t last_idle_time = g_idle_time;
         const uint64_t last_total_time = g_total_time;
@@ -274,8 +289,7 @@ static inline int main_loop(wait_func_t* wait_func)
 
         if (!g_high_cpu_load)
         {
-            // Switch to high load mode at 10% CPU utilization
-            uint64_t threshold = total_time_delta / 10u;
+            uint64_t threshold = total_time_delta / (unsigned int)low_to_high_load_switch_threshold_div;
             if (busy_time_delta > threshold)
             {
                 g_high_cpu_load = true;
@@ -284,12 +298,11 @@ static inline int main_loop(wait_func_t* wait_func)
         }
         else
         {
-            // Switch to low load mode at 6.25% CPU utilization
-            uint64_t threshold = total_time_delta / 16u;
+            uint64_t threshold = total_time_delta / (unsigned int)high_to_low_load_switch_threshold_div;
             if (busy_time_delta < threshold)
             {
-                // Wait for a few sleep times before dropping to low CPU load mode
-                if (low_cpu_load_times < 2u)
+                // Wait for a few updates before dropping to low CPU load mode
+                if (low_cpu_load_times < (unsigned int)low_cpu_load_times_to_demote)
                 {
                     ++low_cpu_load_times;
                 }
@@ -299,6 +312,10 @@ static inline int main_loop(wait_func_t* wait_func)
                     g_high_cpu_load = false;
                     update_cpufreq = true;
                 }
+            }
+            else
+            {
+                low_cpu_load_times = 0u;
             }
         }
 
@@ -310,6 +327,8 @@ static inline int main_loop(wait_func_t* wait_func)
 
             update_cpufreq = false;
         }
+
+        wakeup_time += g_high_cpu_load ? high_cpu_load_wait_us : low_cpu_load_wait_us;
     }
 }
 
